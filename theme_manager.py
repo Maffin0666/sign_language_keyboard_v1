@@ -1,385 +1,409 @@
-# -*- coding: utf-8 -*-
 """
-Менеджер тем: определяет системную тему Windows и позволяет
-переключать между светлой, тёмной и системной.
+Theme manager — auto-detect + Light/Dark/HighContrast
 """
-
-import sys
-import ctypes
-from enum import Enum
-
 from PyQt5.QtWidgets import QApplication
-from PyQt5.QtGui import QColor, QPalette
-from PyQt5.QtCore import QSettings
+from PyQt5.QtGui import QPalette
+from PyQt5.QtCore import QObject, pyqtSignal
+
+try:
+    import darkdetect
+    HAS_DARKDETECT = True
+except ImportError:
+    HAS_DARKDETECT = False
 
 
-class ThemeMode(Enum):
-    SYSTEM = "system"
-    LIGHT = "light"
-    DARK = "dark"
-    HIGH_CONTRAST = "high_contrast"
+class ThemeManager(QObject):
+    theme_changed = pyqtSignal(str)
 
+    THEMES = {
+        "light": {
+            "name": "☀ Светлая",
+            "window_bg": "#F0F0F0",
+            "panel_bg": "#FFFFFF",
+            "key_bg": "#E6E6E6",
+            "key_hover": "#D0D0D0",
+            "key_pressed": "#B8B8B8",
+            "key_active_bg": "#3C8DBC",
+            "key_active_text": "#FFFFFF",
+            "text": "#1A1A1A",
+            "text_dim": "#777777",
+            "border": "#C0C0C0",
+            "accent": "#2196F3",
+            "editor_bg": "#FFFFFF",
+            "editor_text": "#1A1A1A",
+            "tooltip_bg": "#FFFDE7",
+            "tooltip_text": "#333333",
+            "tooltip_border": "#E0D860",
+            "status_bg": "#E8E8E8",
+            "status_text": "#444444",
+            "layer_hs": "#DBEAFE",
+            "layer_loc": "#D1FAE5",
+            "layer_mov": "#FEF3C7",
+            "group_header_bg": "#F5F5F5",
+            "separator": "#D5D5D5",
+        },
+        "dark": {
+            "name": "🌙 Тёмная",
+            "window_bg": "#1E1E1E",
+            "panel_bg": "#2B2B2B",
+            "key_bg": "#3A3A3A",
+            "key_hover": "#4D4D4D",
+            "key_pressed": "#606060",
+            "key_active_bg": "#1565C0",
+            "key_active_text": "#FFFFFF",
+            "text": "#E0E0E0",
+            "text_dim": "#999999",
+            "border": "#555555",
+            "accent": "#64B5F6",
+            "editor_bg": "#2B2B2B",
+            "editor_text": "#E0E0E0",
+            "tooltip_bg": "#3A3A3A",
+            "tooltip_text": "#E0E0E0",
+            "tooltip_border": "#666666",
+            "status_bg": "#2B2B2B",
+            "status_text": "#BBBBBB",
+            "layer_hs": "#1E3A5F",
+            "layer_loc": "#1B4332",
+            "layer_mov": "#5C3D00",
+            "group_header_bg": "#333333",
+            "separator": "#444444",
+        },
+        "high_contrast": {
+            "name": "◐ Контрастная",
+            "window_bg": "#000000",
+            "panel_bg": "#0A0A0A",
+            "key_bg": "#1A1A1A",
+            "key_hover": "#333333",
+            "key_pressed": "#555555",
+            "key_active_bg": "#FFD600",
+            "key_active_text": "#000000",
+            "text": "#FFFFFF",
+            "text_dim": "#FFFF00",
+            "border": "#FFFF00",
+            "accent": "#00FF00",
+            "editor_bg": "#0A0A0A",
+            "editor_text": "#FFFFFF",
+            "tooltip_bg": "#1A1A1A",
+            "tooltip_text": "#FFFFFF",
+            "tooltip_border": "#FFFF00",
+            "status_bg": "#1A1A1A",
+            "status_text": "#FFFF00",
+            "layer_hs": "#001155",
+            "layer_loc": "#004400",
+            "layer_mov": "#553300",
+            "group_header_bg": "#111111",
+            "separator": "#FFFF00",
+        },
+    }
 
-def is_windows_dark_mode():
-    """Определяет, включена ли тёмная тема Windows."""
-    try:
-        import winreg
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
-        )
-        value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
-        winreg.CloseKey(key)
-        return value == 0  # 0 = dark, 1 = light
-    except Exception:
-        return False
+    def __init__(self, initial="auto"):
+        super().__init__()
+        self._mode = initial
+        self._resolved = self._resolve(initial)
 
+    def _resolve(self, mode):
+        if mode == "auto":
+            if HAS_DARKDETECT:
+                try:
+                    t = darkdetect.theme()
+                    if t and t.lower() == "dark":
+                        return "dark"
+                except Exception:
+                    pass
+            try:
+                app = QApplication.instance()
+                if app and app.palette().color(QPalette.Window).lightness() < 128:
+                    return "dark"
+            except Exception:
+                pass
+            return "light"
+        return mode
 
-class ThemeManager:
-    """Управление цветовыми темами клавиатуры."""
+    @property
+    def colors(self):
+        return self.THEMES.get(self._resolved, self.THEMES["light"])
 
-    def __init__(self):
-        self.current_mode = ThemeMode.SYSTEM
-        self._themes = self._build_themes()
+    @property
+    def current(self):
+        return self._resolved
 
-    def _build_themes(self):
-        return {
-            ThemeMode.LIGHT: {
-                "name": "Светлая",
-                "window_bg": "#F0F0F0",
-                "panel_bg": "#FFFFFF",
-                "key_bg": "#E8E8E8",
-                "key_bg_hover": "#D0D0D0",
-                "key_bg_pressed": "#B0B0B0",
-                "key_border": "#C0C0C0",
-                "key_text": "#1A1A1A",
-                "key_label": "#666666",
-                "accent": "#0078D4",
-                "accent_hover": "#106EBE",
-                "accent_text": "#FFFFFF",
-                "category_tab_bg": "#E0E0E0",
-                "category_tab_active": "#0078D4",
-                "category_tab_text": "#333333",
-                "category_tab_text_active": "#FFFFFF",
-                "text_area_bg": "#FFFFFF",
-                "text_area_border": "#CCCCCC",
-                "text_area_text": "#1A1A1A",
-                "tooltip_bg": "#FFFFDD",
-                "tooltip_text": "#333333",
-                "status_bar_bg": "#E8E8E8",
-                "status_bar_text": "#555555",
-                "separator": "#D0D0D0",
-                "shadow_color": "rgba(0,0,0,30)",
-                "key_special_bg": "#D4E6F1",
-                "key_modifier_bg": "#FADBD8",
-            },
-            ThemeMode.DARK: {
-                "name": "Тёмная",
-                "window_bg": "#1E1E1E",
-                "panel_bg": "#2D2D2D",
-                "key_bg": "#3C3C3C",
-                "key_bg_hover": "#4A4A4A",
-                "key_bg_pressed": "#5A5A5A",
-                "key_border": "#555555",
-                "key_text": "#E0E0E0",
-                "key_label": "#999999",
-                "accent": "#4CC2FF",
-                "accent_hover": "#3AA8E5",
-                "accent_text": "#1A1A1A",
-                "category_tab_bg": "#383838",
-                "category_tab_active": "#4CC2FF",
-                "category_tab_text": "#CCCCCC",
-                "category_tab_text_active": "#1A1A1A",
-                "text_area_bg": "#2D2D2D",
-                "text_area_border": "#555555",
-                "text_area_text": "#E0E0E0",
-                "tooltip_bg": "#3C3C3C",
-                "tooltip_text": "#E0E0E0",
-                "status_bar_bg": "#2D2D2D",
-                "status_bar_text": "#999999",
-                "separator": "#444444",
-                "shadow_color": "rgba(0,0,0,80)",
-                "key_special_bg": "#2C4A5E",
-                "key_modifier_bg": "#5E2C2C",
-            },
-            ThemeMode.HIGH_CONTRAST: {
-                "name": "Контрастная",
-                "window_bg": "#000000",
-                "panel_bg": "#000000",
-                "key_bg": "#1A1A1A",
-                "key_bg_hover": "#333333",
-                "key_bg_pressed": "#555555",
-                "key_border": "#FFFF00",
-                "key_text": "#FFFFFF",
-                "key_label": "#FFFF00",
-                "accent": "#00FF00",
-                "accent_hover": "#00CC00",
-                "accent_text": "#000000",
-                "category_tab_bg": "#1A1A1A",
-                "category_tab_active": "#00FF00",
-                "category_tab_text": "#FFFFFF",
-                "category_tab_text_active": "#000000",
-                "text_area_bg": "#000000",
-                "text_area_border": "#FFFF00",
-                "text_area_text": "#FFFFFF",
-                "tooltip_bg": "#1A1A1A",
-                "tooltip_text": "#FFFF00",
-                "status_bar_bg": "#000000",
-                "status_bar_text": "#FFFF00",
-                "separator": "#FFFF00",
-                "shadow_color": "rgba(255,255,0,30)",
-                "key_special_bg": "#003300",
-                "key_modifier_bg": "#330000",
-            },
-        }
+    def set_theme(self, mode):
+        self._mode = mode
+        old = self._resolved
+        self._resolved = self._resolve(mode)
+        if old != self._resolved:
+            self.theme_changed.emit(self._resolved)
 
-    def get_system_theme(self):
-        """Возвращает тему, соответствующую системной."""
-        if is_windows_dark_mode():
-            return ThemeMode.DARK
-        return ThemeMode.LIGHT
+    def cycle(self):
+        order = ["light", "dark", "high_contrast"]
+        try:
+            idx = order.index(self._resolved)
+        except ValueError:
+            idx = -1
+        nxt = order[(idx + 1) % len(order)]
+        self.set_theme(nxt)
+        return nxt
 
-    def get_current_theme(self):
-        """Возвращает словарь текущей темы."""
-        if self.current_mode == ThemeMode.SYSTEM:
-            actual = self.get_system_theme()
-        else:
-            actual = self.current_mode
-        return self._themes.get(actual, self._themes[ThemeMode.LIGHT])
-
-    def cycle_theme(self):
-        """Переключает тему по кругу: System -> Light -> Dark -> HighContrast -> System."""
-        order = [ThemeMode.SYSTEM, ThemeMode.LIGHT, ThemeMode.DARK, ThemeMode.HIGH_CONTRAST]
-        idx = order.index(self.current_mode) if self.current_mode in order else 0
-        self.current_mode = order[(idx + 1) % len(order)]
-        return self.current_mode
-
-    def set_theme(self, mode: ThemeMode):
-        self.current_mode = mode
-
-    def get_mode_name(self):
-        names = {
-            ThemeMode.SYSTEM: "Системная",
-            ThemeMode.LIGHT: "Светлая",
-            ThemeMode.DARK: "Тёмная",
-            ThemeMode.HIGH_CONTRAST: "Контрастная",
-        }
-        return names.get(self.current_mode, "Неизвестно")
-
-    def generate_stylesheet(self):
-        """Генерирует полный QSS стиль для приложения."""
-        t = self.get_current_theme()
+    def stylesheet(self):
+        c = self.colors
         return f"""
-        /* Главное окно */
-        QMainWindow {{
-            background-color: {t['window_bg']};
+        * {{ font-family: "Segoe UI", "Arial", sans-serif; }}
+
+        QMainWindow, QWidget#centralWidget {{
+            background-color: {c['window_bg']};
+            color: {c['text']};
         }}
 
-        QWidget#centralWidget {{
-            background-color: {t['window_bg']};
-        }}
-
-        /* Область текста */
-        QTextEdit {{
-            background-color: {t['text_area_bg']};
-            color: {t['text_area_text']};
-            border: 2px solid {t['text_area_border']};
+        QTextEdit#editor {{
+            background-color: {c['editor_bg']};
+            color: {c['editor_text']};
+            border: 2px solid {c['border']};
             border-radius: 8px;
-            padding: 8px;
-            font-size: 18px;
-            font-family: 'Segoe UI', 'Arial Unicode MS', 'DejaVu Sans';
-            selection-background-color: {t['accent']};
-            selection-color: {t['accent_text']};
+            padding: 10px;
+            font-size: 17px;
+            font-family: "Consolas", "Courier New", monospace;
+            selection-background-color: {c['accent']};
         }}
 
-        QTextEdit:focus {{
-            border-color: {t['accent']};
-        }}
-
-        /* Панель категорий */
-        QWidget#categoryPanel {{
-            background-color: {t['panel_bg']};
+        /* --- Toolbar --- */
+        QFrame#toolbar {{
+            background-color: {c['panel_bg']};
+            border: 1px solid {c['border']};
             border-radius: 8px;
         }}
 
-        /* Кнопки категорий */
-        QPushButton#categoryBtn {{
-            background-color: {t['category_tab_bg']};
-            color: {t['category_tab_text']};
-            border: none;
+        /* --- Layer buttons --- */
+        QPushButton.layerBtn {{
+            background-color: {c['key_bg']};
+            color: {c['text']};
+            border: 2px solid {c['border']};
             border-radius: 6px;
-            padding: 8px 16px;
+            padding: 6px 14px;
             font-size: 13px;
             font-weight: bold;
-            margin: 2px;
+            min-height: 32px;
         }}
-
-        QPushButton#categoryBtn:hover {{
-            background-color: {t['accent']};
-            color: {t['accent_text']};
+        QPushButton.layerBtn:hover {{
+            background-color: {c['key_hover']};
+            border-color: {c['accent']};
         }}
-
-        QPushButton#categoryBtn:checked {{
-            background-color: {t['category_tab_active']};
-            color: {t['category_tab_text_active']};
-        }}
-
-        /* Кнопки клавиатуры */
-        QPushButton#keyBtn {{
-            background-color: {t['key_bg']};
-            color: {t['key_text']};
-            border: 1px solid {t['key_border']};
-            border-radius: 8px;
-            padding: 4px;
-            font-size: 20px;
-            font-family: 'Segoe UI Symbol', 'Arial Unicode MS', 'DejaVu Sans';
-            min-width: 50px;
-            min-height: 50px;
-        }}
-
-        QPushButton#keyBtn:hover {{
-            background-color: {t['key_bg_hover']};
-            border-color: {t['accent']};
-        }}
-
-        QPushButton#keyBtn:pressed {{
-            background-color: {t['key_bg_pressed']};
-        }}
-
-        /* Специальные кнопки */
-        QPushButton#specialKeyBtn {{
-            background-color: {t['key_special_bg']};
-            color: {t['key_text']};
-            border: 1px solid {t['key_border']};
-            border-radius: 8px;
-            padding: 4px 12px;
-            font-size: 12px;
+        QPushButton.layerBtnActive {{
+            background-color: {c['key_active_bg']};
+            color: {c['key_active_text']};
+            border: 2px solid {c['accent']};
+            border-radius: 6px;
+            padding: 6px 14px;
+            font-size: 13px;
             font-weight: bold;
-            min-height: 50px;
+            min-height: 32px;
         }}
 
-        QPushButton#specialKeyBtn:hover {{
-            background-color: {t['accent']};
-            color: {t['accent_text']};
+        /* --- Small toolbar buttons --- */
+        QPushButton.toolBtn {{
+            background-color: {c['key_bg']};
+            color: {c['text']};
+            border: 1px solid {c['border']};
+            border-radius: 5px;
+            padding: 4px 10px;
+            font-size: 12px;
+            min-height: 28px;
+        }}
+        QPushButton.toolBtn:hover {{
+            background-color: {c['key_hover']};
+            border-color: {c['accent']};
         }}
 
-        /* Модификаторы */
-        QPushButton#modifierBtn {{
-            background-color: {t['key_modifier_bg']};
-            color: {t['key_text']};
-            border: 1px solid {t['key_border']};
-            border-radius: 8px;
-            padding: 4px;
-            font-size: 14px;
-            min-width: 50px;
-            min-height: 50px;
+        /* --- Keyboard keys --- */
+        QPushButton.keyBtn {{
+            background-color: {c['key_bg']};
+            color: {c['text']};
+            border: 1px solid {c['border']};
+            border-radius: 6px;
+            font-size: 13px;
+            padding: 2px;
+        }}
+        QPushButton.keyBtn:hover {{
+            background-color: {c['key_hover']};
+            border-color: {c['accent']};
+        }}
+        QPushButton.keyBtn:pressed {{
+            background-color: {c['key_pressed']};
+        }}
+        QPushButton.keyBtnEmpty {{
+            background-color: {c['panel_bg']};
+            color: {c['text_dim']};
+            border: 1px dashed {c['border']};
+            border-radius: 6px;
+            font-size: 11px;
+            padding: 2px;
+        }}
+        QPushButton.keyBtnHighlight {{
+            background-color: {c['key_active_bg']};
+            color: {c['key_active_text']};
+            border: 2px solid {c['accent']};
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: bold;
+            padding: 2px;
         }}
 
-        QPushButton#modifierBtn:hover {{
-            background-color: {t['accent']};
-            color: {t['accent_text']};
+        /* --- Keyboard frame --- */
+        QFrame#keyboardFrame {{
+            background-color: {c['panel_bg']};
+            border: 1px solid {c['border']};
+            border-radius: 10px;
         }}
 
-        /* Статус бар */
-        QStatusBar {{
-            background-color: {t['status_bar_bg']};
-            color: {t['status_bar_text']};
+        /* --- Space bar --- */
+        QPushButton#spaceBar {{
+            background-color: {c['key_bg']};
+            color: {c['text']};
+            border: 1px solid {c['border']};
+            border-radius: 6px;
+            font-size: 12px;
+            min-height: 34px;
+        }}
+        QPushButton#spaceBar:hover {{
+            background-color: {c['key_hover']};
+        }}
+
+        /* --- Status bar --- */
+        QLabel#statusLabel {{
+            background-color: {c['status_bg']};
+            color: {c['status_text']};
+            padding: 5px 12px;
+            border-radius: 6px;
             font-size: 12px;
         }}
 
-        /* Тултипы */
+        /* --- Tooltips --- */
         QToolTip {{
-            background-color: {t['tooltip_bg']};
-            color: {t['tooltip_text']};
-            border: 1px solid {t['key_border']};
-            border-radius: 4px;
-            padding: 4px 8px;
+            background-color: {c['tooltip_bg']};
+            color: {c['tooltip_text']};
+            border: 1px solid {c['tooltip_border']};
+            padding: 6px 10px;
             font-size: 13px;
+            border-radius: 4px;
         }}
 
-        /* Метки */
-        QLabel {{
-            color: {t['key_text']};
-        }}
-
-        QLabel#sectionLabel {{
-            color: {t['key_label']};
-            font-size: 12px;
-            font-style: italic;
-            padding: 4px 0px;
-        }}
-
-        /* Разделитель */
-        QFrame#separator {{
-            background-color: {t['separator']};
-            max-height: 1px;
-        }}
-
-        /* Скроллбар */
+        /* --- Scroll areas in grouped view --- */
         QScrollArea {{
+            background-color: {c['panel_bg']};
             border: none;
-            background-color: transparent;
         }}
-
+        QScrollArea > QWidget > QWidget {{
+            background-color: {c['panel_bg']};
+        }}
         QScrollBar:vertical {{
-            background-color: {t['panel_bg']};
-            width: 10px;
-            border-radius: 5px;
+            background-color: {c['panel_bg']};
+            width: 8px;
         }}
-
         QScrollBar::handle:vertical {{
-            background-color: {t['key_border']};
-            border-radius: 5px;
+            background-color: {c['border']};
+            border-radius: 4px;
             min-height: 30px;
         }}
 
-        QScrollBar::handle:vertical:hover {{
-            background-color: {t['accent']};
+        /* --- Group headers --- */
+        QLabel.groupHeader {{
+            color: {c['text']};
+            background-color: {c['group_header_bg']};
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 12px;
         }}
 
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-            height: 0px;
+        /* --- Dialogs --- */
+        QDialog {{
+            background-color: {c['window_bg']};
+            color: {c['text']};
         }}
-
-        QScrollBar:horizontal {{
-            background-color: {t['panel_bg']};
-            height: 10px;
+        QTextBrowser {{
+            background-color: {c['editor_bg']};
+            color: {c['editor_text']};
+            border: 1px solid {c['border']};
+            border-radius: 6px;
+            padding: 8px;
+        }}
+        QTabWidget::pane {{
+            background-color: {c['panel_bg']};
+            border: 1px solid {c['border']};
+            border-radius: 4px;
+        }}
+        QTabBar::tab {{
+            background-color: {c['key_bg']};
+            color: {c['text']};
+            padding: 6px 14px;
+            border: 1px solid {c['border']};
+            border-bottom: none;
+            border-top-left-radius: 4px;
+            border-top-right-radius: 4px;
+            margin-right: 2px;
+        }}
+        QTabBar::tab:selected {{
+            background-color: {c['key_active_bg']};
+            color: {c['key_active_text']};
+        }}
+        QTabBar::tab:hover {{
+            background-color: {c['key_hover']};
+        }}
+        QGroupBox {{
+            color: {c['text']};
+            border: 1px solid {c['border']};
+            border-radius: 6px;
+            margin-top: 14px;
+            padding-top: 14px;
+            font-weight: bold;
+        }}
+        QGroupBox::title {{
+            color: {c['text']};
+            subcontrol-origin: margin;
+            left: 10px;
+        }}
+        QLineEdit, QComboBox {{
+            background-color: {c['editor_bg']};
+            color: {c['editor_text']};
+            border: 1px solid {c['border']};
+            border-radius: 4px;
+            padding: 5px 8px;
+        }}
+        QListWidget {{
+            background-color: {c['editor_bg']};
+            color: {c['editor_text']};
+            border: 1px solid {c['border']};
+            border-radius: 4px;
+        }}
+        QListWidget::item:selected {{
+            background-color: {c['accent']};
+            color: {c['key_active_text']};
+        }}
+        QPushButton {{
+            background-color: {c['key_bg']};
+            color: {c['text']};
+            border: 1px solid {c['border']};
             border-radius: 5px;
+            padding: 6px 14px;
+            font-size: 13px;
         }}
-
-        QScrollBar::handle:horizontal {{
-            background-color: {t['key_border']};
-            border-radius: 5px;
-            min-width: 30px;
+        QPushButton:hover {{
+            background-color: {c['key_hover']};
         }}
-
-        QScrollBar::handle:horizontal:hover {{
-            background-color: {t['accent']};
-        }}
-
-        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
-            width: 0px;
-        }}
-
-        /* Меню */
-        QMenuBar {{
-            background-color: {t['panel_bg']};
-            color: {t['key_text']};
-        }}
-
-        QMenuBar::item:selected {{
-            background-color: {t['accent']};
-            color: {t['accent_text']};
-        }}
-
         QMenu {{
-            background-color: {t['panel_bg']};
-            color: {t['key_text']};
-            border: 1px solid {t['key_border']};
+            background-color: {c['panel_bg']};
+            color: {c['text']};
+            border: 1px solid {c['border']};
         }}
-
         QMenu::item:selected {{
-            background-color: {t['accent']};
-            color: {t['accent_text']};
+            background-color: {c['accent']};
+            color: {c['key_active_text']};
+        }}
+        QMenuBar {{
+            background-color: {c['panel_bg']};
+            color: {c['text']};
+        }}
+        QMenuBar::item:selected {{
+            background-color: {c['accent']};
+            color: {c['key_active_text']};
         }}
         """
